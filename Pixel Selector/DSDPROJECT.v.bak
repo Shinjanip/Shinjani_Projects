@@ -1,0 +1,118 @@
+module pixel_comparator (
+    input [23:0] p1, p2,
+    input mode, // 0 = Find Min, 1 = Find Max
+    output reg [23:0] selected_pixel
+);
+    always @(*) begin
+        if (mode) 
+            selected_pixel = (p1 > p2) ? p1 : p2; // Max selection
+        else 
+            selected_pixel = (p1 < p2) ? p1 : p2; // Min selection
+    end
+endmodule
+module mux8x1 (
+    input [23:0] d0, d1, d2, d3, d4, d5, d6, d7,
+    input [2:0] sel,
+    output reg [23:0] out
+);
+    always @(*) begin
+        case (sel)
+            3'b000: out = d0;
+            3'b001: out = d1;
+            3'b010: out = d2;
+            3'b011: out = d3;
+            3'b100: out = d4;
+            3'b101: out = d5;
+            3'b110: out = d6;
+            3'b111: out = d7;
+            default: out = 24'h000000;
+        endcase
+    end
+endmodule
+module top (
+    input clk,
+    output [23:0] max_pixel,
+    output [23:0] min_pixel
+);
+    reg [23:0] memory [0:575]; // 24x24 image storage (576 pixels)
+    reg [8:0] address;         // 9-bit address (0-575)
+    reg [2:0] sel;             // MUX select line
+    reg [23:0] max_p, min_p;   // Max/min registers
+    
+    wire [23:0] mux_out;       // MUX output
+    wire [23:0] new_max, new_min;
+
+    // Initialize memory from image.mem
+    initial begin
+        $readmemh("image_data.mem", memory); // Load hex values from file
+        max_p = 24'h000000; // Initialize max to black
+        min_p = 24'hFFFFFF; // Initialize min to white
+        address = 0;
+        sel = 0;
+    end
+
+    // 8:1 MUX (selects 1 pixel from an 8-pixel group)
+    mux8x1 mux_inst (
+        .d0(memory[address]),   .d1(memory[address + 1]), 
+        .d2(memory[address + 2]), .d3(memory[address + 3]),
+        .d4(memory[address + 4]), .d5(memory[address + 5]), 
+        .d6(memory[address + 6]), .d7(memory[address + 7]),
+        .sel(sel),
+        .out(mux_out)
+    );
+
+    // Comparators for max/min
+    pixel_comparator comp_max (
+        .p1(mux_out), .p2(max_p), 
+        .mode(1'b1), .selected_pixel(new_max)
+    );
+    pixel_comparator comp_min (
+        .p1(mux_out), .p2(min_p), 
+        .mode(1'b0), .selected_pixel(new_min)
+    );
+
+    // Update logic
+    always @(posedge clk) begin
+        max_p <= new_max; // Update max
+        min_p <= new_min; // Update min
+        
+        sel <= sel + 1; // Cycle through 8 pixels per group
+        if (sel == 3'b111) begin
+            if (address + 8 >= 576) address <= 0; // Wrap around
+            else address <= address + 8; // Next group
+            sel <= 0;
+        end
+    end
+
+    assign max_pixel = max_p;
+    assign min_pixel = min_p;
+endmodule
+
+module testbench;
+    reg clk;
+    wire [23:0] max_pixel, min_pixel;
+
+    // Instantiate top module with image.mem integration
+    top uut (.clk(clk), .max_pixel(max_pixel), .min_pixel(min_pixel));
+
+    // Generate 100 MHz clock (10ns period)
+    initial begin
+        clk = 0;
+        forever #5 clk = ~clk;
+    end
+
+    // Run simulation to process all pixels
+    initial begin
+        #5760; // 576 pixels × 10ns per pixel = 5760ns
+        $display("Final Results:");
+        $display("  Max Pixel = %h", max_pixel);
+        $display("  Min Pixel = %h", min_pixel);
+        $finish;
+    end
+
+    // Monitor outputs (optional)
+    initial begin
+        $monitor("Time=%4t ns | Current Max=%h | Current Min=%h", 
+                $time, max_pixel, min_pixel);
+    end
+endmodule
